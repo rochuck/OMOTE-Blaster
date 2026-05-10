@@ -2,8 +2,6 @@
 
 A higher-power, always-on IR repeater for the [OMOTE](../OMOTE-Firmware/) remote. The OMOTE finds the blaster on the LAN at wake time and forwards IR sends over WiFi; the blaster fires them through a high-current LED driver. If the blaster isn't reachable, the OMOTE falls back to its built-in IR LED automatically.
 
-> Status: design only — no firmware committed yet. This README is the implementation plan.
-
 ---
 
 ## Why
