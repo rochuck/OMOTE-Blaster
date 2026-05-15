@@ -2,13 +2,16 @@
 #include <IRremoteESP8266.h>
 #include <IRsend.h>
 
-// Active-high driver (transistor/MOSFET into the LED string), so inverted=false.
-static IRsend irsend(IR_SEND_PIN, false);
+// Matches OMOTE: P-channel MOSFET high-side driver (DMG2301L), so the line is
+// active-low — gate LOW turns the FET on. inverted=true, idle HIGH.
+static IRsend irsend(IR_SEND_PIN, true);
 
 void
 ir_sender_init() {
+    // Set the output latch HIGH *before* switching to OUTPUT so the pin never
+    // gets driven LOW (which would turn the FET on) during the pinMode call.
+    digitalWrite(IR_SEND_PIN, HIGH);
     pinMode(IR_SEND_PIN, OUTPUT);
-    digitalWrite(IR_SEND_PIN, LOW);
     irsend.begin();
 }
 
@@ -93,6 +96,9 @@ ir_sender_send(int protocol, const String& dataStr, int nbits, int repeat) {
     Serial.printf("[IR] proto=%d data=0x%llx nbits=%u repeat=%u\n", protocol, (unsigned long long) data, use_nbits, use_repeat);
 
     bool ok = irsend.send((decode_type_t) protocol, data, use_nbits, use_repeat);
+    // The LED is overdriven — force the line back to idle regardless of how
+    // the library exited, so a misbehaving send can't leave the FET conducting.
+    digitalWrite(IR_SEND_PIN, HIGH);
     if (!ok) { return {false, "IrSender.send rejected (unsupported protocol?)"}; }
     return {true, nullptr};
 }

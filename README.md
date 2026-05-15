@@ -58,14 +58,20 @@ Response `200 {"ok":true}` on success, `400` on bad input, `500` on send failure
 
 | Function              | Pin            | Notes                                                                      |
 |-----------------------|----------------|----------------------------------------------------------------------------|
-| IR drive              | D2 / GPIO4     | Into transistor/MOSFET → high-current LED string. 38 kHz carrier in software. |
+| IR drive              | D7 / GPIO13    | Into transistor/MOSFET → high-current LED string. 38 kHz carrier in software. |
 | WiFi LED              | D5 / GPIO14    | Slow blink in portal/connecting; solid when associated.                    |
 | Command-received LED  | D6 / GPIO12    | Lit for 1 s after the most recent HTTP request (`/send`, `/status`, `/update`). |
 | Reset-to-portal       | D3 / GPIO0     | Hold low at boot to force the WiFiManager portal even if creds are saved.  |
+| I2C (reserved)        | D1 / GPIO5 SCL, D2 / GPIO4 SDA | Hardware I2C bus, free for an OLED or other peripheral. 4.7k pull-ups to 3V3 required. |
 | Power LED             | (rail)         | No GPIO. Wired to the supply rail through a current-limit resistor — lit whenever powered. |
 | IR-active indicator   | (driver line)  | Visible LED in series/parallel with the IR LEDs themselves. Hardware-only — confirms LEDs are actually pulsing. |
 
-Power: USB-C or barrel jack to a 5 V supply. The high-current driver and IR LED selection are hardware-side concerns out of scope for the firmware; the firmware just needs a clean digital signal on D2.
+Power: USB-C or barrel jack to a 5 V supply. The high-current IR driver circuit is pictured here:
+
+<div align="center">
+  <img src="images/ir.png" width="30%" alt="ir circuit">
+</div>
+
 
 ## Endpoints
 
