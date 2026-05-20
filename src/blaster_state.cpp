@@ -4,10 +4,12 @@ static String        s_scene;
 static String        s_last_command;
 static unsigned long s_last_command_millis = 0;
 static uint32_t      s_scene_version       = 0;
+static uint32_t      s_scene_receipts      = 0;
 
 void
 blaster_state_set_scene(const String& scene) {
-    if (scene == s_scene) return; // no-op repaints add nothing
+    s_scene_receipts++;           // every push is an edge, even unchanged ones
+    if (scene == s_scene) return; // value unchanged: no scene_version bump
     s_scene = scene;
     s_scene_version++;            // edge the display can watch
 }
@@ -36,6 +38,11 @@ blaster_state_last_command_millis() {
 uint32_t
 blaster_state_scene_version() {
     return s_scene_version;
+}
+
+uint32_t
+blaster_state_scene_receipt_version() {
+    return s_scene_receipts;
 }
 
 uint32_t

@@ -148,12 +148,22 @@ display_loop() {
     // so the panel draws ~uA and can't burn in. Any new activity wakes it.
     static constexpr unsigned long SLEEP_TIMEOUT_MS = 5UL * 60UL * 1000UL;
 
+    // Shorter dwell for a "wake and show me the current scene" nudge — the
+    // remote re-pushing the scene it's already on while we're asleep. We light
+    // up briefly to confirm, then drop back to sleep.
+    static constexpr unsigned long NUDGE_TIMEOUT_MS = 15UL * 1000UL;
+
     // Repaint only when a new /send lands. blaster_state stamps millis() on each
     // command, so a changed timestamp is our "new command arrived" edge — no
     // need to diff strings or redraw every loop.
     static unsigned long s_last_rendered_millis = 0;
     static bool          s_scene_shown          = true;
     static uint32_t      s_last_scene_version   = 0;
+    static uint32_t      s_last_scene_receipt   = 0;
+
+    // Active sleep timeout. Normally the full 5 min, but a same-scene wake nudge
+    // shortens it to NUDGE_TIMEOUT_MS until the next real command/scene change.
+    static unsigned long s_sleep_timeout_ms = SLEEP_TIMEOUT_MS;
 
     // Sleep bookkeeping. s_last_activity_ms tracks the last command/scene edge;
     // seed it on the first loop so the splash/status screen counts as activity.
@@ -176,20 +186,38 @@ display_loop() {
     };
 
     // A scene change repaints immediately, even with no IR command, so pushing a
-    // new /scene swaps the displayed logo right away.
+    // new /scene swaps the displayed logo right away, with the full sleep dwell.
     uint32_t scene_version = blaster_state_scene_version();
+    uint32_t scene_receipt = blaster_state_scene_receipt_version();
     if (scene_version != s_last_scene_version) {
         s_last_scene_version = scene_version;
+        s_last_scene_receipt = scene_receipt;
         s_scene_shown        = true;
+        s_sleep_timeout_ms   = SLEEP_TIMEOUT_MS;
         wake();
         display_show_scene(blaster_state_get_scene());
         return;
+    }
+
+    // Re-pushing the scene we're already on is normally a no-op, but while the
+    // panel is asleep we treat it as a "wake and show me the current scene"
+    // nudge: light up, repaint, and use the short dwell so it sleeps again soon.
+    if (scene_receipt != s_last_scene_receipt) {
+        s_last_scene_receipt = scene_receipt;
+        if (s_asleep) {
+            s_scene_shown      = true;
+            s_sleep_timeout_ms = NUDGE_TIMEOUT_MS;
+            wake();
+            display_show_scene(blaster_state_get_scene());
+            return;
+        }
     }
 
     unsigned long stamp = blaster_state_last_command_millis();
     if (stamp != 0 && stamp != s_last_rendered_millis) {
         s_last_rendered_millis = stamp;
         s_scene_shown          = false;
+        s_sleep_timeout_ms     = SLEEP_TIMEOUT_MS;
         wake();
         display_show_command(blaster_state_get_scene(),
                              blaster_state_get_last_command());
@@ -206,7 +234,7 @@ display_loop() {
 
     // No activity for the timeout window: power the panel off until the next
     // command or scene change wakes it.
-    if (!s_asleep && millis() - s_last_activity_ms >= SLEEP_TIMEOUT_MS) {
+    if (!s_asleep && millis() - s_last_activity_ms >= s_sleep_timeout_ms) {
         s_display.ssd1306_command(SSD1306_DISPLAYOFF);
         s_asleep = true;
     }

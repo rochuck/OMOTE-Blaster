@@ -20,6 +20,12 @@ blaster_state_get_scene();
 uint32_t
 blaster_state_scene_version();
 
+// Bumps on every scene push, even when the value is unchanged. The display uses
+// this to treat a re-sent (identical) scene as a "wake and show me" nudge while
+// it's asleep, which scene_version alone can't distinguish from a no-op.
+uint32_t
+blaster_state_scene_receipt_version();
+
 void
 blaster_state_set_last_command(const String& name);
 const String&
