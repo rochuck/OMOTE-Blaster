@@ -129,11 +129,17 @@ a higher-current rail or a separate driver supply.
 
 **Port 80 (app):**
 
-| Method | Path      | Purpose                                                  |
-|--------|-----------|----------------------------------------------------------|
-| POST   | `/send`   | Fire IR. Body: `{protocol, data, nbits?, repeat?}`       |
-| GET    | `/status` | Health/version: `{ok, version, uptime, rssi}`            |
-| POST   | `/reset`  | Reboot (debug aid, build-flag gated).                    |
+| Method | Path      | Purpose                                                                          |
+|--------|-----------|----------------------------------------------------------------------------------|
+| POST   | `/send`   | Fire IR. Body: `{protocol, data, nbits?, repeat?, scene?, name?}`                |
+| POST   | `/scene`  | Update displayed scene (no IR). Body: `{scene}` — pushed when the scene changes. |
+| GET    | `/status` | Health/version: `{ok, version, uptime, rssi, ip, scene, lastCommand, lastCommandAgo}` |
+| POST   | `/reset`  | Reboot (debug aid, build-flag gated).                                            |
+
+`scene` (active scene name, e.g. `"Apple TV"` / `"Off"`) and `name` (human label
+for the command, e.g. `"ATV PLAY"`) are optional and additive — older blasters
+ignore them. They feed a (planned) status display; the remote also pushes scene
+changes via `/scene` so the display stays current even when no IR is sent.
 
 **Port 3232 (OTA, when `ENABLE_OTA=1`):**
 

@@ -1,4 +1,5 @@
 #include "http_server.h"
+#include "blaster_state.h"
 #include "ir_sender.h"
 #include "status_led.h"
 
@@ -38,6 +39,10 @@ handle_status() {
     doc["uptime"]  = (uint32_t) (millis() / 1000);
     doc["rssi"]    = WiFi.RSSI();
     doc["ip"]      = WiFi.localIP().toString();
+    // Display-facing state pushed by the remote (see blaster_state).
+    doc["scene"]          = blaster_state_get_scene();
+    doc["lastCommand"]    = blaster_state_get_last_command();
+    doc["lastCommandAgo"] = blaster_state_last_command_age_s();
     send_json(200, doc);
 }
 
@@ -48,7 +53,7 @@ handle_send() {
         return;
     }
     const String& body = s_server->arg("plain");
-    if (body.length() > 256) {
+    if (body.length() > 512) { // room for optional scene/name strings
         send_error(413, "body too large");
         return;
     }
@@ -79,6 +84,49 @@ handle_send() {
         return;
     }
 
+    // Display state: scene (optional) and a label for "last command". Prefer the
+    // human-readable name the remote sends; fall back to the raw code when absent.
+    if (req["scene"].is<const char*>()) {
+        blaster_state_set_scene(req["scene"].as<const char*>());
+    }
+    const char* name = req["name"] | "";
+    blaster_state_set_last_command(name[0] ? String(name) : data);
+
+    Serial.printf("[rx] /send scene=\"%s\" cmd=\"%s\" proto=%d data=%s\n",
+                  blaster_state_get_scene().c_str(),
+                  blaster_state_get_last_command().c_str(), protocol, data.c_str());
+
+    status_led_pulse_cmd();
+    JsonDocument resp;
+    resp["ok"] = true;
+    send_json(200, resp);
+}
+
+static void
+handle_scene() {
+    if (!s_server->hasArg("plain")) {
+        send_error(400, "missing JSON body");
+        return;
+    }
+    const String& body = s_server->arg("plain");
+    if (body.length() > 256) {
+        send_error(413, "body too large");
+        return;
+    }
+    JsonDocument         req;
+    DeserializationError err = deserializeJson(req, body);
+    if (err) {
+        send_error(400, "JSON parse error");
+        return;
+    }
+    if (!req["scene"].is<const char*>()) {
+        send_error(400, "scene (string) required");
+        return;
+    }
+    blaster_state_set_scene(req["scene"].as<const char*>());
+
+    Serial.printf("[rx] /scene scene=\"%s\"\n", blaster_state_get_scene().c_str());
+
     status_led_pulse_cmd();
     JsonDocument resp;
     resp["ok"] = true;
@@ -107,6 +155,7 @@ http_server_begin(uint16_t port) {
     s_server->keepAlive(false); // close each connection after responding; see send_json
     s_server->on("/status", HTTP_GET, handle_status);
     s_server->on("/send", HTTP_POST, handle_send);
+    s_server->on("/scene", HTTP_POST, handle_scene);
     s_server->on("/reset", HTTP_POST, handle_reset);
     s_server->onNotFound(handle_not_found);
     s_server->begin();

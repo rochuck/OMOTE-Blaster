@@ -1,5 +1,6 @@
 #include <Arduino.h>
 
+#include "display.h"
 #include "http_server.h"
 #include "ir_sender.h"
 #include "mdns_service.h"
@@ -18,6 +19,8 @@ setup() {
     Serial.printf("\n[boot] OMOTE-Blaster %s\n", BLASTER_VERSION);
 
     status_led_init();
+    display_init();
+    delay(1000); // hold the boot splash before the WiFi status screen replaces it
 
     wifi_setup_begin(BLASTER_AP_NAME, BLASTER_HOSTNAME);
     mdns_service_begin(BLASTER_HOSTNAME, BLASTER_HTTP_PORT, BLASTER_OTA_PORT);
@@ -30,6 +33,7 @@ setup() {
 void
 loop() {
     mdns_service_loop();
+    display_loop();
     http_server_loop();
     ota_loop();
     status_led_loop();

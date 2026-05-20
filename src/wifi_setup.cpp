@@ -1,4 +1,5 @@
 #include "wifi_setup.h"
+#include "display.h"
 #include "status_led.h"
 
 #include <Arduino.h>
@@ -26,6 +27,12 @@ wifi_setup_begin(const char* ap_name, const char* hostname) {
     wm.setConfigPortalTimeout(0); // block forever — the blaster is useless without WiFi
     wm.setConnectTimeout(20);
 
+    // When WiFiManager falls back to its config AP, show join instructions on
+    // the OLED. softAPIP() is valid by the time this fires (default 192.168.4.1).
+    wm.setAPCallback([](WiFiManager* m) {
+        display_show_ap_mode(m->getConfigPortalSSID(), WiFi.softAPIP().toString());
+    });
+
     if (force_portal) {
         Serial.println("[wifi] portal button held — forcing config portal");
         wm.startConfigPortal(ap_name);
@@ -40,4 +47,5 @@ wifi_setup_begin(const char* ap_name, const char* hostname) {
 
     Serial.printf("[wifi] connected, ip=%s rssi=%d\n", WiFi.localIP().toString().c_str(), WiFi.RSSI());
     status_led_set_wifi(WIFI_LED_SOLID);
+    display_show_connected(WiFi.localIP().toString());
 }

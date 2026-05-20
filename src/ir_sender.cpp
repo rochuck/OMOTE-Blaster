@@ -1,6 +1,7 @@
 #include "ir_sender.h"
 #include <IRremoteESP8266.h>
 #include <IRsend.h>
+#include <new>
 
 // Matches OMOTE: P-channel MOSFET high-side driver (DMG2301L), so the line is
 // active-low — gate LOW turns the FET on. inverted=true, idle HIGH.
@@ -74,9 +75,45 @@ get_protocol_defaults(int protocol, uint16_t& nbits, uint16_t& repeat) {
     }
 }
 
+// GlobalCache is an encoding, not a protocol: the data is a comma-separated
+// timing list (carrier freq, repeat count, repeat offset, then on/off
+// durations) that must be replayed verbatim via sendGC() — send() can't encode
+// it. The OMOTE uses this for amp power, AppleTV power, and the HDMI inputs, so
+// rejecting it (as the numeric strtoull path did) silently drops "AMP ON".
+// Mirrors OMOTE-Firmware/hardware/ESP32/infrared_sender_hal_esp32.cpp:72-91.
+static IrSendResult
+send_globalcache(const String& dataStr) {
+    uint16_t count = 1;
+    for (size_t i = 0; i < dataStr.length(); i++) {
+        if (dataStr[i] == ',') count++;
+    }
+    if (count < 3) { return {false, "GlobalCache data too short"}; }
+
+    uint16_t* buf = new (std::nothrow) uint16_t[count];
+    if (!buf) { return {false, "out of memory for GlobalCache buffer"}; }
+
+    uint16_t idx   = 0;
+    int      start = 0;
+    for (int i = 0; i <= (int) dataStr.length() && idx < count; i++) {
+        if (i == (int) dataStr.length() || dataStr[i] == ',') {
+            buf[idx++] = (uint16_t) strtoul(dataStr.substring(start, i).c_str(), nullptr, 0);
+            start = i + 1;
+        }
+    }
+
+    Serial.printf("[IR] GlobalCache len=%u freq=%u\n", count, buf[0]);
+    irsend.sendGC(buf, count);
+    delete[] buf;
+    // Force the line back to idle; see the note in ir_sender_send.
+    digitalWrite(IR_SEND_PIN, HIGH);
+    return {true, nullptr};
+}
+
 IrSendResult
 ir_sender_send(int protocol, const String& dataStr, int nbits, int repeat) {
     if (dataStr.length() == 0) { return {false, "missing data"}; }
+
+    if (protocol == GLOBALCACHE) { return send_globalcache(dataStr); }
 
     // Parse "0xABCD", "0b1010", or decimal. strtoull with base=0 handles all three.
     char*    endp = nullptr;
