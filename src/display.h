@@ -19,3 +19,12 @@ void
 display_show_connected(const String& ip);
 void
 display_show_ap_mode(const String& ssid, const String& portal_ip);
+
+// Firmware-upload screens, driven by the OTA handler. display_show_ota_progress
+// draws a labelled progress bar; it self-throttles, so calling it on every
+// upload chunk is cheap (it only repaints when the bar advances a pixel).
+// display_show_ota_result paints the final OK/FAIL state.
+void
+display_show_ota_progress(size_t written, size_t total);
+void
+display_show_ota_result(bool ok);

@@ -8,6 +8,7 @@
 
 #if (ENABLE_OTA == 1)
 
+#include "display.h"
 #include "status_led.h"
 
 #include <Arduino.h>
@@ -25,9 +26,11 @@ handle_post() {
         s_ota_server->send(200, "text/plain", "FAIL");
         Serial.println("[ota] failed");
         status_led_set_wifi(WIFI_LED_FAST_BLINK);
+        display_show_ota_result(false);
     } else {
         s_ota_server->send(200, "text/plain", "OK");
         Serial.println("[ota] success — rebooting");
+        display_show_ota_result(true);
         delay(100);
         ESP.restart();
     }
@@ -47,10 +50,12 @@ handle_upload() {
         // standard ESP8266HTTPUpdateServer pattern).
         uint32_t size = s_total > 0 ? (uint32_t) s_total : ((ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000);
         if (!Update.begin(size, U_FLASH)) { Update.printError(Serial); }
+        display_show_ota_progress(0, s_total);
 
     } else if (upload.status == UPLOAD_FILE_WRITE) {
         if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) { Update.printError(Serial); }
         s_written += upload.currentSize;
+        display_show_ota_progress(s_written, s_total);
 
     } else if (upload.status == UPLOAD_FILE_END) {
         if (Update.end(true)) {

@@ -12,6 +12,7 @@
 #include "blaster_state.h"
 #include "kodi_logo.h"
 #include "lyrion_logo.h"
+#include "off_logo.h"
 #include "zethus_logo.h"
 
 // 128x32 panel. -1 = no hardware reset pin (shared with the MCU reset on most
@@ -90,6 +91,10 @@ display_show_scene_icon(const String& scene) {
         bits = LYRION_LOGO_BITS;
         w    = LYRION_LOGO_WIDTH;
         h    = LYRION_LOGO_HEIGHT;
+    } else if (scene.equalsIgnoreCase("Off")) {
+        bits = OFF_LOGO_BITS;
+        w    = OFF_LOGO_WIDTH;
+        h    = OFF_LOGO_HEIGHT;
     } else {
         return false;
     }
@@ -114,10 +119,12 @@ display_show_scene(const String& scene) {
 
     s_display.clearDisplay();
     s_display.setTextColor(SSD1306_WHITE);
+
     s_display.setFont(&FreeSansBold9pt7b);
 
-    // Center the label: getTextBounds gives the rendered extent so we can place
-    // the cursor at the left/baseline that lands the glyphs in the middle.
+    // Center the label: getTextBounds gives the rendered extent (chosen font and
+    // all) so we can place the cursor at the left/baseline that lands the glyphs
+    // in the middle.
     int16_t  x1, y1;
     uint16_t w, h;
     s_display.getTextBounds(label, 0, 0, &x1, &y1, &w, &h);
@@ -135,6 +142,12 @@ display_loop() {
     // How long the IR command label stays up before we swap to the scene name.
     static constexpr unsigned long COMMAND_DWELL_MS = 2000;
 
+    // Power the panel off after this long with no command or scene change. The
+    // SSD1306 has nothing to refresh, so a static scene name would otherwise sit
+    // lit indefinitely and burn into the OLED. DISPLAYOFF cuts the charge pump,
+    // so the panel draws ~uA and can't burn in. Any new activity wakes it.
+    static constexpr unsigned long SLEEP_TIMEOUT_MS = 5UL * 60UL * 1000UL;
+
     // Repaint only when a new /send lands. blaster_state stamps millis() on each
     // command, so a changed timestamp is our "new command arrived" edge — no
     // need to diff strings or redraw every loop.
@@ -142,12 +155,33 @@ display_loop() {
     static bool          s_scene_shown          = true;
     static uint32_t      s_last_scene_version   = 0;
 
+    // Sleep bookkeeping. s_last_activity_ms tracks the last command/scene edge;
+    // seed it on the first loop so the splash/status screen counts as activity.
+    static unsigned long s_last_activity_ms = 0;
+    static bool          s_seeded           = false;
+    static bool          s_asleep           = false;
+    if (!s_seeded) {
+        s_seeded           = true;
+        s_last_activity_ms = millis();
+    }
+
+    // Wakes the panel back up when activity arrives after a sleep. The caller
+    // repaints immediately after, so we only need to flip the panel back on.
+    auto wake = [&]() {
+        if (s_asleep) {
+            s_display.ssd1306_command(SSD1306_DISPLAYON);
+            s_asleep = false;
+        }
+        s_last_activity_ms = millis();
+    };
+
     // A scene change repaints immediately, even with no IR command, so pushing a
     // new /scene swaps the displayed logo right away.
     uint32_t scene_version = blaster_state_scene_version();
     if (scene_version != s_last_scene_version) {
         s_last_scene_version = scene_version;
         s_scene_shown        = true;
+        wake();
         display_show_scene(blaster_state_get_scene());
         return;
     }
@@ -156,6 +190,7 @@ display_loop() {
     if (stamp != 0 && stamp != s_last_rendered_millis) {
         s_last_rendered_millis = stamp;
         s_scene_shown          = false;
+        wake();
         display_show_command(blaster_state_get_scene(),
                              blaster_state_get_last_command());
         return;
@@ -167,6 +202,13 @@ display_loop() {
         millis() - s_last_rendered_millis >= COMMAND_DWELL_MS) {
         s_scene_shown = true;
         display_show_scene(blaster_state_get_scene());
+    }
+
+    // No activity for the timeout window: power the panel off until the next
+    // command or scene change wakes it.
+    if (!s_asleep && millis() - s_last_activity_ms >= SLEEP_TIMEOUT_MS) {
+        s_display.ssd1306_command(SSD1306_DISPLAYOFF);
+        s_asleep = true;
     }
 }
 
@@ -181,13 +223,90 @@ display_show_connected(const String& ip) {
     // baseline, so y is the baseline row, not the top of the glyphs.
     s_display.setFont(&FreeSerifBoldItalic9pt7b);
     s_display.setCursor(2, 15);
-    s_display.print("Omote Ready");
+    s_display.print("Blaster Ready");
 
     // Back to the built-in 5x7 font for the IP line at the bottom.
     s_display.setFont(nullptr);
     s_display.setTextSize(1);
     s_display.setCursor(0, 24);
     s_display.print(ip);
+    s_display.display();
+}
+
+void
+display_show_ota_progress(size_t written, size_t total) {
+    if (!s_ready) return;
+
+    // Bar geometry: a full-width outlined rail under a title line, 2px inset so
+    // the frame doesn't touch the panel edge.
+    static constexpr int16_t BAR_X = 2;
+    static constexpr int16_t BAR_Y = 18;
+    static constexpr int16_t BAR_W = DISPLAY_WIDTH - 2 * BAR_X;
+    static constexpr int16_t BAR_H = 12;
+    static constexpr int16_t FILL_MAX = BAR_W - 2; // inside the 1px border
+
+    // Without a Content-Length we can't show real progress; draw an empty rail.
+    int16_t fill = 0;
+    int     pct  = 0;
+    if (total > 0) {
+        if (written > total) written = total;
+        fill = (int16_t)((uint32_t)written * FILL_MAX / total);
+        pct  = (int)((uint32_t)written * 100 / total);
+    }
+
+    // Self-throttle: repaint only when the fill width changes. I2C is slow
+    // (~5ms for a full 128x32 flush), and chunks arrive far faster than one
+    // pixel of bar each, so this keeps the OLED from bottlenecking the flash.
+    // written == 0 is the start of a transfer; always paint that frame so a
+    // fresh upload shows an empty bar even if the previous one also ended at 0.
+    static int16_t s_last_fill = -1;
+    if (written != 0 && fill == s_last_fill) return;
+    s_last_fill = fill;
+
+    s_display.clearDisplay();
+    s_display.setTextColor(SSD1306_WHITE);
+    s_display.setFont(nullptr);
+    s_display.setTextSize(1);
+
+    s_display.setCursor(0, 0);
+    s_display.print("Updating");
+    if (total > 0) {
+        // Right-align the percentage on the title row (6px per char at size 1).
+        String p = String(pct) + "%";
+        s_display.setCursor(DISPLAY_WIDTH - (int16_t)p.length() * 6, 0);
+        s_display.print(p);
+    }
+
+    // Pill: rounded rail with the corner radius pinned to half the height, and
+    // a fill that's rounded to match. fillRoundRect needs a width of at least
+    // 2*r+1 to render, so clamp the radius to the current fill width.
+    static constexpr int16_t RAIL_R = BAR_H / 2;
+    static constexpr int16_t FILL_R = (BAR_H - 2) / 2;
+    s_display.drawRoundRect(BAR_X, BAR_Y, BAR_W, BAR_H, RAIL_R, SSD1306_WHITE);
+    if (fill > 0) {
+        int16_t r = fill < 2 * FILL_R + 1 ? fill / 2 : FILL_R;
+        s_display.fillRoundRect(BAR_X + 1, BAR_Y + 1, fill, BAR_H - 2, r, SSD1306_WHITE);
+    }
+    s_display.display();
+}
+
+void
+display_show_ota_result(bool ok) {
+    if (!s_ready) return;
+
+    s_display.clearDisplay();
+    s_display.setTextColor(SSD1306_WHITE);
+    s_display.setFont(&FreeSansBold9pt7b);
+
+    String label = ok ? "Update OK" : "Update FAIL";
+    int16_t  x1, y1;
+    uint16_t w, h;
+    s_display.getTextBounds(label, 0, 0, &x1, &y1, &w, &h);
+    int16_t x = (DISPLAY_WIDTH - (int16_t)w) / 2 - x1;
+    int16_t y = (DISPLAY_HEIGHT - (int16_t)h) / 2 - y1;
+    s_display.setCursor(x, y);
+    s_display.print(label);
+    s_display.setFont(nullptr);
     s_display.display();
 }
 
@@ -219,5 +338,9 @@ void
 display_show_connected(const String&) {}
 void
 display_show_ap_mode(const String&, const String&) {}
+void
+display_show_ota_progress(size_t, size_t) {}
+void
+display_show_ota_result(bool) {}
 
 #endif
