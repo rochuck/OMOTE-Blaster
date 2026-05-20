@@ -7,9 +7,15 @@
 
 void
 wifi_setup_begin(const char* ap_name, const char* hostname) {
+#ifdef PORTAL_BUTTON_PIN
     pinMode(PORTAL_BUTTON_PIN, INPUT_PULLUP);
     delay(20); // settle the pull-up before sampling
     bool force_portal = (digitalRead(PORTAL_BUTTON_PIN) == LOW);
+#else
+    // No portal button wired (e.g. ESP-01 — no spare GPIOs). The user reaches
+    // the portal by clearing saved creds; autoConnect falls through to AP mode.
+    bool force_portal = false;
+#endif
 
     WiFi.mode(WIFI_STA);
     WiFi.hostname(hostname);

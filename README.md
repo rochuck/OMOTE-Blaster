@@ -54,7 +54,14 @@ Response `200 {"ok":true}` on success, `400` on bad input, `500` on send failure
 
 ---
 
-## Hardware (Wemos D1 Mini / ESP8266)
+## Hardware
+
+Two build targets are supported:
+
+- **`d1_mini`** — Wemos D1 Mini (ESP8266, 4 MB flash). Full feature set, with status LEDs and a portal-reset button. This is the reference build.
+- **`esp01_1m`** — ESP-01S (ESP8266, 1 MB flash). IR-only minimal build for tight spaces. Drops both status LEDs and the portal button (no spare GPIOs). Detailed below.
+
+### Wemos D1 Mini pinout
 
 | Function              | Pin            | Notes                                                                      |
 |-----------------------|----------------|----------------------------------------------------------------------------|
@@ -66,12 +73,57 @@ Response `200 {"ok":true}` on success, `400` on bad input, `500` on send failure
 | Power LED             | (rail)         | No GPIO. Wired to the supply rail through a current-limit resistor — lit whenever powered. |
 | IR-active indicator   | (driver line)  | Visible LED in series/parallel with the IR LEDs themselves. Hardware-only — confirms LEDs are actually pulsing. |
 
-Power: USB-C or barrel jack to a 5 V supply. The high-current IR driver circuit is pictured here:
+Power: USB-C or barrel jack to a 5 V supply.
+
+### ESP-01S pinout
+
+The ESP-01S has only one safely-usable output GPIO outside the UART, so this
+build is IR-only — no LEDs, no portal button.
+
+| Function              | Pin            | Notes                                                                      |
+|-----------------------|----------------|----------------------------------------------------------------------------|
+| IR drive              | GPIO2          | Must float HIGH at boot (strap pin). The driver is active-low (P-FET, idle HIGH), so the idle state matches the boot requirement. |
+| Reset-to-portal       | —              | Not wired. To force the portal, clear saved WiFi creds (e.g. router-side, or flash a build with `wm.resetSettings()`). |
+| Status LEDs           | —              | Not wired. Source compiles them out when `LED_WIFI_PIN` / `LED_CMD_PIN` are undefined. |
+
+Build & flash:
+
+```bash
+pio run -e esp01_1m -t upload       # serial (with USB-UART adapter, GPIO0 → GND for flash mode)
+pio run -e esp01_1m-ota -t upload   # OTA, once WiFi is configured
+```
+
+Flash layout is `1M (512K FS, 512K OTA)` via `eagle.flash.1m512.ld`; sketch currently fits in ~80% of the 500 KB slot.
+
+The high-current IR driver circuit is pictured here:
 
 <div align="center">
   <img src="images/ir.png" width="30%" alt="ir circuit">
 </div>
 
+### Driving multiple IR LEDs
+
+The driver above is shown with a single SFH4547 + 3.3 Ω resistor. Each branch
+draws ~520 mA peak (`(3.3 V − Vf) / 3.3 Ω` at Vf ≈ 1.6 V), 38 kHz 50% duty,
+~40% time-in-burst → ~100 mA average per LED.
+
+You can parallel additional LEDs (each with its own 3.3 Ω resistor; the FET
+is fine to ~1.5 A pulsed). Two limits set how many:
+
+| Constraint                  | Limit at 800 mA regulator         |
+|-----------------------------|-----------------------------------|
+| Continuous (average) current | ~8 LEDs                          |
+| Per-cycle charge balance with stock 10 µF C11 | **3 LEDs** (binding) |
+
+For **4 LEDs**, replace C11 with a lower-ESR / higher-capacitance reservoir.
+Two 22 µF / 10 V (or higher) X5R ceramics in parallel give ~270 mV ripple
+during the burst and combined ESR of 1–2 mΩ — better than a single 100 µF
+tantalum, which can drop 0.2–1.0 V across its ESR during each pulse. Avoid
+generic solid tantalum here; ESR is the limiting spec, not capacitance.
+
+Past 4 LEDs the AAT1110's 800 mA average rating sets a DC sag on the 3.3 V
+rail during sustained bursts (no cap fixes this), so further scaling wants
+a higher-current rail or a separate driver supply.
 
 ## Endpoints
 
@@ -154,4 +206,4 @@ End-to-end smoke test, in order:
 - **Latency for macros.** HTTP on LAN is 5–15 ms. If a future scene fires a burst of codes, may want pipelining or a WebSocket — easy to add later, same wire format.
 - **Multiple blasters.** mDNS browse can return >1 service. v1: pick the first. Revisit if per-device routing is wanted.
 - **Security.** Open on LAN. Fine for a home network; if exposed, add a shared-secret header (`X-Blaster-Token`) stored in NVS on both ends.
-- **Hardware (out of scope for firmware).** High-current driver, LED selection, heat dissipation. The firmware doesn't care as long as D2 sees a clean digital signal into the driver.
+- **Hardware (out of scope for firmware).** High-current driver, LED selection, heat dissipation. The firmware doesn't care as long as the IR drive pin (D7/GPIO13 on D1 Mini, GPIO2 on ESP-01S) sees a clean digital signal into the driver.

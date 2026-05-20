@@ -1,58 +1,70 @@
 #include "status_led.h"
 #include <Arduino.h>
 
-static uint8_t       s_wifi_pin     = 0;
-static uint8_t       s_cmd_pin      = 0;
-static WifiLedMode   s_wifi_mode    = WIFI_LED_OFF;
-static unsigned long s_cmd_until_ms = 0;
+#ifdef LED_WIFI_PIN
+static WifiLedMode s_wifi_mode = WIFI_LED_OFF;
+#endif
 
-static void
-write_wifi(bool on) {
-    digitalWrite(s_wifi_pin, on ? HIGH : LOW);
-}
+#ifdef LED_CMD_PIN
+static unsigned long s_cmd_until_ms = 0;
+#endif
 
 void
-status_led_init(uint8_t wifi_pin, uint8_t cmd_pin) {
-    s_wifi_pin = wifi_pin;
-    s_cmd_pin  = cmd_pin;
-    pinMode(s_wifi_pin, OUTPUT);
-    pinMode(s_cmd_pin, OUTPUT);
-    digitalWrite(s_wifi_pin, LOW);
-    digitalWrite(s_cmd_pin, LOW);
+status_led_init() {
+#ifdef LED_WIFI_PIN
+    pinMode(LED_WIFI_PIN, OUTPUT);
+    digitalWrite(LED_WIFI_PIN, LOW);
+#endif
+#ifdef LED_CMD_PIN
+    pinMode(LED_CMD_PIN, OUTPUT);
+    digitalWrite(LED_CMD_PIN, LOW);
+#endif
 }
 
 void
 status_led_set_wifi(WifiLedMode mode) {
+#ifdef LED_WIFI_PIN
     s_wifi_mode = mode;
+#else
+    (void) mode;
+#endif
 }
 
 void
 status_led_pulse_cmd() {
+#ifdef LED_CMD_PIN
     s_cmd_until_ms = millis() + LED_CMD_HOLD_MS;
-    digitalWrite(s_cmd_pin, HIGH);
+    digitalWrite(LED_CMD_PIN, HIGH);
+#endif
 }
 
 void
 status_led_loop() {
+#if defined(LED_WIFI_PIN) || defined(LED_CMD_PIN)
     unsigned long now = millis();
+#endif
 
+#ifdef LED_WIFI_PIN
     switch (s_wifi_mode) {
     case WIFI_LED_OFF:
-        write_wifi(false);
+        digitalWrite(LED_WIFI_PIN, LOW);
         break;
     case WIFI_LED_SOLID:
-        write_wifi(true);
+        digitalWrite(LED_WIFI_PIN, HIGH);
         break;
     case WIFI_LED_SLOW_BLINK:
-        write_wifi((now / 500) & 1);
+        digitalWrite(LED_WIFI_PIN, (now / 500) & 1);
         break;
     case WIFI_LED_FAST_BLINK:
-        write_wifi((now / 100) & 1);
+        digitalWrite(LED_WIFI_PIN, (now / 100) & 1);
         break;
     }
+#endif
 
+#ifdef LED_CMD_PIN
     if (s_cmd_until_ms != 0 && (long) (now - s_cmd_until_ms) >= 0) {
-        digitalWrite(s_cmd_pin, LOW);
+        digitalWrite(LED_CMD_PIN, LOW);
         s_cmd_until_ms = 0;
     }
+#endif
 }

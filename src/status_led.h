@@ -1,7 +1,5 @@
 #pragma once
 
-#include <stdint.h>
-
 enum WifiLedMode {
     WIFI_LED_OFF,
     WIFI_LED_SLOW_BLINK, // portal / connecting (500 ms period)
@@ -9,8 +7,11 @@ enum WifiLedMode {
     WIFI_LED_SOLID
 };
 
+// All four functions are unconditionally callable. Pin presence is controlled
+// at build time: undefining LED_WIFI_PIN or LED_CMD_PIN compiles out the
+// corresponding logic (used by the ESP-01 build, which has no spare GPIOs).
 void
-status_led_init(uint8_t wifi_pin, uint8_t cmd_pin);
+status_led_init();
 void
 status_led_set_wifi(WifiLedMode mode);
 void

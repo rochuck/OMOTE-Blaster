@@ -13,6 +13,10 @@ static void
 send_json(int code, const JsonDocument& doc) {
     String body;
     serializeJson(doc, body);
+    // The ESP8266 has only a handful of TCP PCBs. Tell the client to close after
+    // each response so connections can't pile up in keep-alive/TIME_WAIT and
+    // exhaust the pool (which manifests as the server hanging after a few sends).
+    s_server->sendHeader("Connection", "close");
     s_server->send(code, "application/json", body);
 }
 
@@ -100,6 +104,7 @@ handle_not_found() {
 void
 http_server_begin(uint16_t port) {
     s_server = new ESP8266WebServer(port);
+    s_server->keepAlive(false); // close each connection after responding; see send_json
     s_server->on("/status", HTTP_GET, handle_status);
     s_server->on("/send", HTTP_POST, handle_send);
     s_server->on("/reset", HTTP_POST, handle_reset);
