@@ -37,3 +37,21 @@ unsigned long
 blaster_state_last_command_millis();
 uint32_t
 blaster_state_last_command_age_s();
+
+// --- GUI state authority ------------------------------------------------
+// The remote treats the blaster as the source of truth for GUI state across
+// reboots — when a remote wakes, it GETs /state and reconciles its screen to
+// match. Stored in RAM only; a blaster reboot loses this until the next POST.
+// valid=false means "nothing has been posted yet since boot".
+
+void
+blaster_state_set_gui(const String& scene, const String& guiName,
+                      int guiList, int lastIndex);
+bool
+blaster_state_gui_valid();
+const String&
+blaster_state_gui_name();
+int
+blaster_state_gui_list();
+int
+blaster_state_gui_last_index();

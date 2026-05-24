@@ -132,14 +132,53 @@ a higher-current rail or a separate driver supply.
 | Method | Path      | Purpose                                                                          |
 |--------|-----------|----------------------------------------------------------------------------------|
 | POST   | `/send`   | Fire IR. Body: `{protocol, data, nbits?, repeat?, scene?, name?}`                |
-| POST   | `/scene`  | Update displayed scene (no IR). Body: `{scene}` — pushed when the scene changes. |
+| POST   | `/scene`  | Update displayed scene (no IR). Body: `{scene}` — kept for older remotes.        |
+| GET    | `/state`  | GUI state authority — see below.                                                 |
+| POST   | `/state`  | GUI state authority — see below.                                                 |
 | GET    | `/status` | Health/version: `{ok, version, uptime, rssi, ip, scene, lastCommand, lastCommandAgo}` |
 | POST   | `/reset`  | Reboot (debug aid, build-flag gated).                                            |
 
 `scene` (active scene name, e.g. `"Apple TV"` / `"Off"`) and `name` (human label
 for the command, e.g. `"ATV PLAY"`) are optional and additive — older blasters
-ignore them. They feed a (planned) status display; the remote also pushes scene
-changes via `/scene` so the display stays current even when no IR is sent.
+ignore them. They feed the status display; the remote also pushes scene changes
+via `/scene` (legacy) or `/state` so the display stays current even when no IR
+is sent.
+
+#### GUI-state authority (`/state`)
+
+The blaster is the source of truth for `(scene, guiName, guiList, lastIndex)`
+across remotes. With two OMOTEs sharing one blaster, whichever remote you pick
+up reconciles to the blaster's last-known screen on wake.
+
+- **Storage:** RAM only — a blaster reboot returns `valid: false` until the
+  next POST. Acceptable because the next remote to wake up republishes.
+- **Conflict policy:** last write wins. No version/CAS — POSTs are accepted in
+  the order received.
+
+```
+GET /state
+  200 → {"valid":true,"scene":"Apple TV","guiName":"Apple TV","guiList":1,"lastIndex":0}
+        {"valid":false}                          # cold blaster, no POST yet
+
+POST /state  Content-Type: application/json
+  body  {"scene":"...","guiName":"...","guiList":N,"lastIndex":N}
+  200 → {"ok":true}
+```
+
+`guiList` is `0` (main list) or `1` (scene-specific list). `lastIndex` is the
+GUI-list position to return to when crossing lists. All four fields are
+required on POST; missing fields yield `400`.
+
+The remote's reconcile flow on boot:
+1. Restore from local NVS → show that screen immediately.
+2. Once the blaster handshake succeeds, GET `/state`.
+3. If `valid:true` and fields differ, navigate the GUI to match. If the user
+   already changed scene/screen during the window, their action wins and the
+   apply is skipped (their change has already been POSTed).
+4. If `valid:false`, POST current state — the blaster adopts it.
+
+Per-change POSTs from the remote keep the blaster's view current so the *next*
+remote to wake has somewhere to read from.
 
 **Port 3232 (OTA, when `ENABLE_OTA=1`):**
 

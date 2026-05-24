@@ -133,6 +133,66 @@ handle_scene() {
     send_json(200, resp);
 }
 
+// GUI-state authority for the multi-remote sync. The remote POSTs its full
+// state on every change and GETs on boot so a second remote lands on the same
+// screen. RAM-only — last-write-wins.
+static void
+handle_state_get() {
+    JsonDocument doc;
+    if (!blaster_state_gui_valid()) {
+        doc["valid"] = false;
+    } else {
+        doc["valid"]     = true;
+        doc["scene"]     = blaster_state_get_scene();
+        doc["guiName"]   = blaster_state_gui_name();
+        doc["guiList"]   = blaster_state_gui_list();
+        doc["lastIndex"] = blaster_state_gui_last_index();
+    }
+    send_json(200, doc);
+}
+
+static void
+handle_state_post() {
+    if (!s_server->hasArg("plain")) {
+        send_error(400, "missing JSON body");
+        return;
+    }
+    const String& body = s_server->arg("plain");
+    if (body.length() > 512) {
+        send_error(413, "body too large");
+        return;
+    }
+    JsonDocument         req;
+    DeserializationError err = deserializeJson(req, body);
+    if (err) {
+        send_error(400, "JSON parse error");
+        return;
+    }
+    if (!req["scene"].is<const char*>() ||
+        !req["guiName"].is<const char*>() ||
+        !req["guiList"].is<int>() ||
+        !req["lastIndex"].is<int>()) {
+        send_error(400, "scene/guiName/guiList/lastIndex required");
+        return;
+    }
+
+    blaster_state_set_gui(req["scene"].as<const char*>(),
+                          req["guiName"].as<const char*>(),
+                          req["guiList"].as<int>(),
+                          req["lastIndex"].as<int>());
+
+    Serial.printf("[rx] /state scene=\"%s\" gui=\"%s\" list=%d idx=%d\n",
+                  blaster_state_get_scene().c_str(),
+                  blaster_state_gui_name().c_str(),
+                  blaster_state_gui_list(),
+                  blaster_state_gui_last_index());
+
+    status_led_pulse_cmd();
+    JsonDocument resp;
+    resp["ok"] = true;
+    send_json(200, resp);
+}
+
 static void
 handle_reset() {
     status_led_pulse_cmd();
@@ -156,6 +216,8 @@ http_server_begin(uint16_t port) {
     s_server->on("/status", HTTP_GET, handle_status);
     s_server->on("/send", HTTP_POST, handle_send);
     s_server->on("/scene", HTTP_POST, handle_scene);
+    s_server->on("/state", HTTP_GET,  handle_state_get);
+    s_server->on("/state", HTTP_POST, handle_state_post);
     s_server->on("/reset", HTTP_POST, handle_reset);
     s_server->onNotFound(handle_not_found);
     s_server->begin();
