@@ -10,8 +10,8 @@
 // NOTE: set low here for testing; production value is 60UL*60UL*1000UL (1 hour).
 // It must be > COUNTDOWN_MS to leave a normal (non-warning) window; if it isn't,
 // inactivity_loop() clamps the countdown so the timer still behaves sanely.
-static constexpr unsigned long INACTIVITY_TIMEOUT_MS = 2UL * 60UL * 1000UL; // 1 min (test)
-static constexpr unsigned long COUNTDOWN_MS          = 60UL * 1000UL;       // 60 s
+static constexpr unsigned long INACTIVITY_TIMEOUT_MS = 60UL * 60UL * 1000UL; // 1 min (test)
+static constexpr unsigned long COUNTDOWN_MS          = 60UL * 1000UL;        // 60 s
 
 // Protocol numbers as understood by ir_sender_send (decode_type_t / the OMOTE
 // IR_PROTOCOL_* enum, which share numbering). SHARP=14, GLOBALCACHE=31.

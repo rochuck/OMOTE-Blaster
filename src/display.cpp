@@ -28,6 +28,25 @@ static bool             s_ready = false;
 // skips its own refresh/sleep logic. Cleared by display_clear_countdown().
 static bool s_countdown_active = false;
 
+// Panel power state, shared between display_loop() and the wake helper. The
+// sleep timeout cuts the SSD1306 charge pump (DISPLAYOFF); anything that needs
+// to paint while we might be asleep must wake() first or it draws into hidden
+// GDDRAM. millis() of the last command/scene edge, used to time the sleep.
+static bool          s_asleep           = false;
+static unsigned long s_last_activity_ms = 0;
+
+// Turn the panel back on and reset the sleep timer. Idempotent. Used both by
+// display_loop on a new command/scene edge and by the OTA screens, which can
+// arrive long after the panel has slept.
+static void
+display_wake() {
+    if (s_asleep) {
+        s_display.ssd1306_command(SSD1306_DISPLAYON);
+        s_asleep = false;
+    }
+    s_last_activity_ms = millis();
+}
+
 void
 display_init() {
     Wire.begin(DISPLAY_SDA_PIN, DISPLAY_SCL_PIN);
@@ -169,11 +188,10 @@ display_loop() {
     // shortens it to NUDGE_TIMEOUT_MS until the next real command/scene change.
     static unsigned long s_sleep_timeout_ms = SLEEP_TIMEOUT_MS;
 
-    // Sleep bookkeeping. s_last_activity_ms tracks the last command/scene edge;
-    // seed it on the first loop so the splash/status screen counts as activity.
-    static unsigned long s_last_activity_ms = 0;
-    static bool          s_seeded           = false;
-    static bool          s_asleep           = false;
+    // Sleep bookkeeping. s_last_activity_ms / s_asleep live at file scope so the
+    // OTA screens can wake the panel too; seed the activity stamp on the first
+    // loop so the splash/status screen counts as activity.
+    static bool s_seeded = false;
     if (!s_seeded) {
         s_seeded           = true;
         s_last_activity_ms = millis();
@@ -184,16 +202,6 @@ display_loop() {
     // as a normal command/scene edge below, which repaints through wake().
     if (s_countdown_active) return;
 
-    // Wakes the panel back up when activity arrives after a sleep. The caller
-    // repaints immediately after, so we only need to flip the panel back on.
-    auto wake = [&]() {
-        if (s_asleep) {
-            s_display.ssd1306_command(SSD1306_DISPLAYON);
-            s_asleep = false;
-        }
-        s_last_activity_ms = millis();
-    };
-
     // A scene change repaints immediately, even with no IR command, so pushing a
     // new /scene swaps the displayed logo right away, with the full sleep dwell.
     uint32_t scene_version = blaster_state_scene_version();
@@ -203,7 +211,7 @@ display_loop() {
         s_last_scene_receipt = scene_receipt;
         s_scene_shown        = true;
         s_sleep_timeout_ms   = SLEEP_TIMEOUT_MS;
-        wake();
+        display_wake();
         display_show_scene(blaster_state_get_scene());
         return;
     }
@@ -216,7 +224,7 @@ display_loop() {
         if (s_asleep) {
             s_scene_shown      = true;
             s_sleep_timeout_ms = NUDGE_TIMEOUT_MS;
-            wake();
+            display_wake();
             display_show_scene(blaster_state_get_scene());
             return;
         }
@@ -227,7 +235,7 @@ display_loop() {
         s_last_rendered_millis = stamp;
         s_scene_shown          = false;
         s_sleep_timeout_ms     = SLEEP_TIMEOUT_MS;
-        wake();
+        display_wake();
         display_show_command(blaster_state_get_scene(),
                              blaster_state_get_last_command());
         return;
@@ -273,6 +281,10 @@ display_show_connected(const String& ip) {
 void
 display_show_ota_progress(size_t written, size_t total) {
     if (!s_ready) return;
+
+    // An OTA can land long after the panel slept; force it on so the bar is
+    // actually visible and not just drawn into a powered-down GDDRAM.
+    display_wake();
 
     // Bar geometry: a full-width outlined rail under a title line, 2px inset so
     // the frame doesn't touch the panel edge.
@@ -330,6 +342,8 @@ display_show_ota_progress(size_t written, size_t total) {
 void
 display_show_ota_result(bool ok) {
     if (!s_ready) return;
+
+    display_wake();
 
     s_display.clearDisplay();
     s_display.setTextColor(SSD1306_WHITE);
