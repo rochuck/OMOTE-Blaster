@@ -28,3 +28,12 @@ void
 display_show_ota_progress(size_t written, size_t total);
 void
 display_show_ota_result(bool ok);
+
+// Inactivity auto-off countdown. display_show_countdown draws a large centered
+// seconds-left number; invert=true renders it in reverse video (full-screen
+// flash). It wakes the panel and suppresses the normal display_loop refresh/
+// sleep state machine until display_clear_countdown() repaints the live scene.
+void
+display_show_countdown(int seconds, bool invert);
+void
+display_clear_countdown();

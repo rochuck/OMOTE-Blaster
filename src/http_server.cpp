@@ -1,5 +1,6 @@
 #include "http_server.h"
 #include "blaster_state.h"
+#include "inactivity.h"
 #include "ir_sender.h"
 #include "status_led.h"
 
@@ -96,6 +97,7 @@ handle_send() {
                   blaster_state_get_scene().c_str(),
                   blaster_state_get_last_command().c_str(), protocol, data.c_str());
 
+    inactivity_note_activity(); // user-driven IR command resets the auto-off timer
     status_led_pulse_cmd();
     JsonDocument resp;
     resp["ok"] = true;
@@ -127,6 +129,7 @@ handle_scene() {
 
     Serial.printf("[rx] /scene scene=\"%s\"\n", blaster_state_get_scene().c_str());
 
+    inactivity_note_activity(); // user-driven scene change resets the auto-off timer
     status_led_pulse_cmd();
     JsonDocument resp;
     resp["ok"] = true;
@@ -187,6 +190,7 @@ handle_state_post() {
                   blaster_state_gui_list(),
                   blaster_state_gui_last_index());
 
+    inactivity_note_activity(); // user-driven GUI navigation resets the auto-off timer
     status_led_pulse_cmd();
     JsonDocument resp;
     resp["ok"] = true;
