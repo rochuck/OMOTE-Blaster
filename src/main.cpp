@@ -2,6 +2,7 @@
 
 #include "display.h"
 #include "http_server.h"
+#include "inactivity.h"
 #include "ir_sender.h"
 #include "mdns_service.h"
 #include "ota.h"
@@ -35,6 +36,7 @@ loop() {
     mdns_service_loop();
     display_loop();
     http_server_loop();
+    inactivity_loop(); // after http_server_loop so it sees this tick's activity
     ota_loop();
     status_led_loop();
 }

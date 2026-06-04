@@ -24,6 +24,10 @@ static constexpr uint8_t DISPLAY_ADDRESS = 0x3C;
 static Adafruit_SSD1306 s_display(DISPLAY_WIDTH, DISPLAY_HEIGHT, &Wire, -1);
 static bool             s_ready = false;
 
+// While true, display_loop() yields the panel to the inactivity countdown and
+// skips its own refresh/sleep logic. Cleared by display_clear_countdown().
+static bool s_countdown_active = false;
+
 void
 display_init() {
     Wire.begin(DISPLAY_SDA_PIN, DISPLAY_SCL_PIN);
@@ -174,6 +178,11 @@ display_loop() {
         s_seeded           = true;
         s_last_activity_ms = millis();
     }
+
+    // The inactivity countdown owns the panel while it's up; don't fight it with
+    // repaints or sleep. A user action after cancel clears the flag and arrives
+    // as a normal command/scene edge below, which repaints through wake().
+    if (s_countdown_active) return;
 
     // Wakes the panel back up when activity arrives after a sleep. The caller
     // repaints immediately after, so we only need to flip the panel back on.
@@ -356,6 +365,50 @@ display_show_ap_mode(const String& ssid, const String& portal_ip) {
     s_display.display();
 }
 
+void
+display_show_countdown(int seconds, bool invert) {
+    if (!s_ready) return;
+
+    // By now the panel has been asleep for ~55 min; force it on.
+    s_countdown_active = true;
+    s_display.ssd1306_command(SSD1306_DISPLAYON);
+
+    // size 4 of the built-in 5x7 font is ~32px tall — fills the panel height.
+    s_display.setFont(nullptr);
+    s_display.setTextSize(4);
+
+    // Reverse video on alternate seconds: paint the whole panel white and draw
+    // the digits in black; otherwise black panel, white digits.
+    if (invert) {
+        s_display.fillRect(0, 0, DISPLAY_WIDTH, DISPLAY_HEIGHT, SSD1306_WHITE);
+        s_display.setTextColor(SSD1306_BLACK);
+    } else {
+        s_display.clearDisplay();
+        s_display.setTextColor(SSD1306_WHITE);
+    }
+
+    String label = String(seconds);
+    int16_t  x1, y1;
+    uint16_t w, h;
+    s_display.getTextBounds(label, 0, 0, &x1, &y1, &w, &h);
+    int16_t x = (DISPLAY_WIDTH - (int16_t)w) / 2 - x1;
+    int16_t y = (DISPLAY_HEIGHT - (int16_t)h) / 2 - y1;
+    s_display.setCursor(x, y);
+    s_display.print(label);
+
+    s_display.setTextSize(1); // restore default for other screens
+    s_display.display();
+}
+
+void
+display_clear_countdown() {
+    if (!s_ready) return;
+    s_countdown_active = false;
+    // Repaint whatever scene is now current (the live scene on cancel, "Off"
+    // after an auto-off). display_loop resumes its normal duties next tick.
+    display_show_scene(blaster_state_get_scene());
+}
+
 #else // ENABLE_DISPLAY
 
 void
@@ -370,5 +423,9 @@ void
 display_show_ota_progress(size_t, size_t) {}
 void
 display_show_ota_result(bool) {}
+void
+display_show_countdown(int, bool) {}
+void
+display_clear_countdown() {}
 
 #endif

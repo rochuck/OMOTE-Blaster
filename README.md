@@ -202,6 +202,38 @@ Direct port of [OMOTE-Firmware/hardware/ESP32/ota_hal_esp32.cpp](../OMOTE-Firmwa
 
 ---
 
+## Inactivity auto-off
+
+When a scene is active (anything that isn't `Off` / empty) and **no user action
+reaches the blaster for 1 hour**, the blaster powers the AV gear down on its own
+and drops to the `Off` scene. This is the one place the blaster acts on its own
+rather than just repeating what the remote sends, so it carries the three
+power-off codes itself (Sharp TV, Marantz amp, Apple TV), fired in the same
+order as the OMOTE's `scene_allOff`.
+
+- **What counts as activity:** only the user-driven POSTs — `/send`, `/state`,
+  `/scene`. The remote's background polling (`GET /state` every 2 s, `GET
+  /status`) is deliberately ignored, or the timer would never elapse. Any
+  qualifying POST resets the full timer.
+- **Countdown warning:** during the final 60 s the OLED shows a large
+  seconds-left number, inverting on alternate seconds to flash. Any user action
+  during the window cancels the shutdown and restarts the hour.
+- **Going Off cleanly:** the blaster doesn't just set `scene:"Off"` — it pushes
+  the complete GUI-state tuple a remote would have on the Off screen
+  (`guiList:0`, `guiName:"Scene selection"`, `lastIndex:0`). A partial update
+  (scene only) leaves stale GUI fields, which makes the remote's reconcile bail
+  and bounce the old scene back, re-arming the timer. The full tuple lets every
+  remote land on Off on its next poll.
+- **No display build (ESP-01):** the countdown is a no-op; the power-off still
+  fires at the timeout.
+
+Tuning lives in `src/inactivity.cpp` (`INACTIVITY_TIMEOUT_MS`, `COUNTDOWN_MS`).
+For testing, set the timeout to a value **greater than** the 60 s countdown
+(e.g. 2 min); if it's set at or below the countdown, the countdown is clamped to
+half the timeout so a normal (non-warning) window always remains.
+
+---
+
 ## Verification
 
 End-to-end smoke test, in order:
@@ -243,6 +275,15 @@ End-to-end smoke test, in order:
     - Held button (auto-repeat): no request queue blow-up; HTTP timeouts shouldn't stack.
     - Long-press codes: covered automatically (same `executeCommand` path); verify one.
     - Power-cycle the router: both devices reconnect and the OMOTE re-discovers.
+
+11. **Inactivity auto-off.** Temporarily set `INACTIVITY_TIMEOUT_MS` low (e.g.
+    2 min, still > the 60 s countdown). Put the blaster in an active scene and
+    stop touching it. At `timeout − countdown` the OLED starts a flashing
+    countdown; pressing any button clears it and restarts the timer (no codes
+    sent). Let a fresh cycle reach 0: serial shows the off codes firing, the
+    panel shows the **Off** logo, `/status` reports `scene:"Off"`, and every
+    remote reconciles to the Off scene on its next poll. Confirm it powers off once
+    and does **not** re-fire. Restore the production timeout (1 h) when done.
 
 ---
 
