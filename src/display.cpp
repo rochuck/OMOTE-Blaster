@@ -10,6 +10,7 @@
 
 #include "apple_tv_logo.h"
 #include "blaster_state.h"
+#include "inactivity.h"
 #include "kodi_logo.h"
 #include "lyrion_logo.h"
 #include "off_logo.h"
@@ -63,6 +64,51 @@ display_init() {
     s_display.display();
 
     Serial.println("[display] ready");
+}
+
+// Last inactivity overlay state painted onto a scene screen, so display_loop()
+// can repaint only when the displayed minute or rail width actually changes.
+// -1 means "nothing drawn yet / not on a scene screen".
+static int     s_overlay_minutes = -1;
+static int16_t s_overlay_px      = -1;
+
+// Inactivity "time remaining" indicator, drawn over a live scene screen: a tiny
+// 2-digit minutes-left readout in the lower-right corner and a 1px rail along
+// the bottom whose filled width tracks the fraction of the window remaining.
+// No-op (and clears the trackers) on the Off/idle screen, where the timer isn't
+// running. Caller must s_display.display() afterwards; this only stages pixels.
+static void
+display_draw_inactivity_overlay() {
+    unsigned long remaining_ms = 0, total_ms = 0;
+    if (!inactivity_get_status(&remaining_ms, &total_ms) || total_ms == 0) {
+        s_overlay_minutes = -1;
+        s_overlay_px      = -1;
+        return;
+    }
+
+    // Minutes left, rounded up so it reads down to "1" through the final minute.
+    int minutes = (int)((remaining_ms + 59999UL) / 60000UL);
+    if (minutes > 99) minutes = 99; // 2-digit field
+    int16_t px = (int16_t)((uint32_t)remaining_ms * DISPLAY_WIDTH / total_ms);
+
+    s_overlay_minutes = minutes;
+    s_overlay_px      = px;
+
+    // Bottom rail (row 31): clear the row of any logo pixels, then draw the
+    // remaining-time portion in white from the left.
+    s_display.drawFastHLine(0, DISPLAY_HEIGHT - 1, DISPLAY_WIDTH, SSD1306_BLACK);
+    if (px > 0) s_display.drawFastHLine(0, DISPLAY_HEIGHT - 1, px, SSD1306_WHITE);
+
+    // Two digits in the built-in 5x7 font, lower-right, on a black backing box so
+    // they stay legible over a full-bleed logo (Lyrion/Kodi). 6px/char advance.
+    char buf[3];
+    snprintf(buf, sizeof(buf), "%2d", minutes);
+    s_display.fillRect(DISPLAY_WIDTH - 14, DISPLAY_HEIGHT - 10, 14, 9, SSD1306_BLACK);
+    s_display.setFont(nullptr);
+    s_display.setTextSize(1);
+    s_display.setTextColor(SSD1306_WHITE);
+    s_display.setCursor(DISPLAY_WIDTH - 12, DISPLAY_HEIGHT - 9);
+    s_display.print(buf);
 }
 
 // Render the active scene plus the most recent IR command. Scene rides the top
@@ -128,6 +174,7 @@ display_show_scene_icon(const String& scene) {
     s_display.clearDisplay();
     s_display.setTextColor(SSD1306_WHITE);
     s_display.drawBitmap(lx, ly, bits, w, h, SSD1306_WHITE);
+    display_draw_inactivity_overlay(); // no-op on the Off logo (timer idle)
     s_display.display();
     return true;
 }
@@ -157,6 +204,7 @@ display_show_scene(const String& scene) {
     s_display.print(label);
     s_display.setFont(nullptr); // restore default for other screens
 
+    display_draw_inactivity_overlay();
     s_display.display();
 }
 
@@ -247,6 +295,23 @@ display_loop() {
         millis() - s_last_rendered_millis >= COMMAND_DWELL_MS) {
         s_scene_shown = true;
         display_show_scene(blaster_state_get_scene());
+    }
+
+    // While a live scene logo is up, tick the inactivity overlay down. Repaint
+    // only when the displayed minute or the rail width changes — at a 1 hr window
+    // that's at most once every ~28 s, so the slow I2C flush stays cheap. This
+    // repaints the same scene without touching s_last_activity_ms, so it doesn't
+    // hold the panel awake past the normal sleep timeout.
+    if (s_scene_shown && !s_asleep) {
+        unsigned long remaining_ms = 0, total_ms = 0;
+        if (inactivity_get_status(&remaining_ms, &total_ms) && total_ms) {
+            int minutes = (int)((remaining_ms + 59999UL) / 60000UL);
+            if (minutes > 99) minutes = 99;
+            int16_t px = (int16_t)((uint32_t)remaining_ms * DISPLAY_WIDTH / total_ms);
+            if (minutes != s_overlay_minutes || px != s_overlay_px) {
+                display_show_scene(blaster_state_get_scene());
+            }
+        }
     }
 
     // No activity for the timeout window: power the panel off until the next

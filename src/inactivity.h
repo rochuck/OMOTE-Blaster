@@ -15,3 +15,11 @@ void
 inactivity_note_activity(); // call from the user-action POST handlers
 void
 inactivity_loop(); // call from loop()
+
+// Snapshot of the running timer, for the on-screen "time remaining" indicator.
+// Returns false (and leaves the outputs untouched) when no scene is active, so
+// the Off screen draws no indicator. Otherwise fills *remaining_ms with the time
+// left before auto-off and *total_ms with the full window. Either pointer may be
+// null.
+bool
+inactivity_get_status(unsigned long* remaining_ms, unsigned long* total_ms);

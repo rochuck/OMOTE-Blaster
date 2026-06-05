@@ -89,6 +89,21 @@ do_auto_off() {
     display_clear_countdown(); // drops countdown mode and repaints the Off scene
 }
 
+bool
+inactivity_get_status(unsigned long* remaining_ms, unsigned long* total_ms) {
+    if (!scene_is_active()) return false;
+
+    // Mirror inactivity_loop()'s baseline so the indicator and the auto-off agree
+    // even before the first loop() seeds s_last_activity_ms.
+    unsigned long base    = s_seeded ? s_last_activity_ms : millis();
+    unsigned long elapsed = millis() - base;
+    unsigned long left = elapsed >= INACTIVITY_TIMEOUT_MS ? 0UL : INACTIVITY_TIMEOUT_MS - elapsed;
+
+    if (remaining_ms) *remaining_ms = left;
+    if (total_ms) *total_ms = INACTIVITY_TIMEOUT_MS;
+    return true;
+}
+
 void
 inactivity_note_activity() {
     // Just stamp the time; inactivity_loop() observes the reset and tears down
