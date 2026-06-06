@@ -184,13 +184,23 @@ handle_state_post() {
                           req["guiList"].as<int>(),
                           req["lastIndex"].as<int>());
 
-    Serial.printf("[rx] /state scene=\"%s\" gui=\"%s\" list=%d idx=%d\n",
+    // Automatic reconcile pushes (remote boot/wake re-sync, reconnect catch-up)
+    // carry "reconcile":true. They update our state but are NOT user activity,
+    // so they must not re-arm the auto-off timer — otherwise an IMU wake (which
+    // reboots the remote and re-syncs) would keep the system alive forever.
+    // Missing key == user navigation, keeping older remotes backward-compatible.
+    bool reconcile = req["reconcile"] | false;
+
+    Serial.printf("[rx] /state scene=\"%s\" gui=\"%s\" list=%d idx=%d%s\n",
                   blaster_state_get_scene().c_str(),
                   blaster_state_gui_name().c_str(),
                   blaster_state_gui_list(),
-                  blaster_state_gui_last_index());
+                  blaster_state_gui_last_index(),
+                  reconcile ? " (reconcile)" : "");
 
-    inactivity_note_activity(); // user-driven GUI navigation resets the auto-off timer
+    if (!reconcile) {
+        inactivity_note_activity(); // user-driven GUI navigation resets the auto-off timer
+    }
     status_led_pulse_cmd();
     JsonDocument resp;
     resp["ok"] = true;
