@@ -207,6 +207,55 @@ handle_state_post() {
     send_json(200, resp);
 }
 
+// Configurable inactivity auto-off window. The remote's settings screen GETs the
+// current value to populate its menu and POSTs a new one when the user changes
+// it. Value is in whole minutes; the blaster clamps and persists it.
+static void
+handle_inactivity_get() {
+    JsonDocument doc;
+    doc["ok"]             = true;
+    doc["timeoutMinutes"] = inactivity_get_timeout_minutes();
+    send_json(200, doc);
+}
+
+static void
+handle_inactivity_post() {
+    if (!s_server->hasArg("plain")) {
+        send_error(400, "missing JSON body");
+        return;
+    }
+    const String& body = s_server->arg("plain");
+    if (body.length() > 128) {
+        send_error(413, "body too large");
+        return;
+    }
+    JsonDocument         req;
+    DeserializationError err = deserializeJson(req, body);
+    if (err) {
+        send_error(400, "JSON parse error");
+        return;
+    }
+    if (!req["timeoutMinutes"].is<int>()) {
+        send_error(400, "timeoutMinutes (int) required");
+        return;
+    }
+    int minutes = req["timeoutMinutes"].as<int>();
+    if (minutes < (int) INACTIVITY_MIN_MINUTES || minutes > (int) INACTIVITY_MAX_MINUTES) {
+        send_error(400, "timeoutMinutes out of range");
+        return;
+    }
+
+    inactivity_set_timeout_minutes((unsigned int) minutes);
+
+    Serial.printf("[rx] /inactivity timeoutMinutes=%u\n", inactivity_get_timeout_minutes());
+
+    status_led_pulse_cmd();
+    JsonDocument resp;
+    resp["ok"]             = true;
+    resp["timeoutMinutes"] = inactivity_get_timeout_minutes();
+    send_json(200, resp);
+}
+
 static void
 handle_reset() {
     status_led_pulse_cmd();
@@ -232,6 +281,8 @@ http_server_begin(uint16_t port) {
     s_server->on("/scene", HTTP_POST, handle_scene);
     s_server->on("/state", HTTP_GET,  handle_state_get);
     s_server->on("/state", HTTP_POST, handle_state_post);
+    s_server->on("/inactivity", HTTP_GET,  handle_inactivity_get);
+    s_server->on("/inactivity", HTTP_POST, handle_inactivity_post);
     s_server->on("/reset", HTTP_POST, handle_reset);
     s_server->onNotFound(handle_not_found);
     s_server->begin();
