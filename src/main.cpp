@@ -7,6 +7,7 @@
 #include "mdns_service.h"
 #include "ota.h"
 #include "status_led.h"
+#include "time_sync.h"
 #include "wifi_setup.h"
 
 void
@@ -26,6 +27,7 @@ setup() {
     inactivity_begin(); // load the persisted auto-off window before serving /inactivity
 
     wifi_setup_begin(BLASTER_AP_NAME, BLASTER_HOSTNAME);
+    time_sync_begin(); // start NTP now that WiFi is up; served to the remote via /state
     mdns_service_begin(BLASTER_HOSTNAME, BLASTER_HTTP_PORT, BLASTER_OTA_PORT);
     http_server_begin(BLASTER_HTTP_PORT);
     ota_begin(BLASTER_OTA_PORT);

@@ -3,6 +3,7 @@
 #include "inactivity.h"
 #include "ir_sender.h"
 #include "status_led.h"
+#include "time_sync.h"
 
 #include <Arduino.h>
 #include <ArduinoJson.h>
@@ -151,6 +152,9 @@ handle_state_get() {
         doc["guiList"]   = blaster_state_gui_list();
         doc["lastIndex"] = blaster_state_gui_last_index();
     }
+    // Wall-clock time for the remote's status-bar clock. UTC epoch, independent of
+    // GUI validity; absent until NTP syncs, which the remote treats as "no time yet".
+    if (time_sync_valid()) doc["epoch"] = time_sync_epoch();
     send_json(200, doc);
 }
 
