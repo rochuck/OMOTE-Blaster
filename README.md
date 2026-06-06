@@ -135,6 +135,8 @@ a higher-current rail or a separate driver supply.
 | POST   | `/scene`  | Update displayed scene (no IR). Body: `{scene}` — kept for older remotes.        |
 | GET    | `/state`  | GUI state authority — see below.                                                 |
 | POST   | `/state`  | GUI state authority — see below.                                                 |
+| GET    | `/inactivity` | Auto-off window: `{ok, timeoutMinutes}`. See *Inactivity auto-off*.           |
+| POST   | `/inactivity` | Set auto-off window. Body: `{timeoutMinutes}` (1–1440). Persisted to EEPROM.  |
 | GET    | `/status` | Health/version: `{ok, version, uptime, rssi, ip, scene, lastCommand, lastCommandAgo}` |
 | POST   | `/reset`  | Reboot (debug aid, build-flag gated).                                            |
 
@@ -205,11 +207,11 @@ Direct port of [OMOTE-Firmware/hardware/ESP32/ota_hal_esp32.cpp](../OMOTE-Firmwa
 ## Inactivity auto-off
 
 When a scene is active (anything that isn't `Off` / empty) and **no user action
-reaches the blaster for 1 hour**, the blaster powers the AV gear down on its own
-and drops to the `Off` scene. This is the one place the blaster acts on its own
-rather than just repeating what the remote sends, so it carries the three
-power-off codes itself (Sharp TV, Marantz amp, Apple TV), fired in the same
-order as the OMOTE's `scene_allOff`.
+reaches the blaster for the configured window** (default 1 hour), the blaster
+powers the AV gear down on its own and drops to the `Off` scene. This is the one
+place the blaster acts on its own rather than just repeating what the remote
+sends, so it carries the three power-off codes itself (Sharp TV, Marantz amp,
+Apple TV), fired in the same order as the OMOTE's `scene_allOff`.
 
 - **What counts as activity:** only the user-driven POSTs — `/send`, `/state`,
   `/scene`. The remote's background polling (`GET /state` every 2 s, `GET
@@ -227,10 +229,18 @@ order as the OMOTE's `scene_allOff`.
 - **No display build (ESP-01):** the countdown is a no-op; the power-off still
   fires at the timeout.
 
-Tuning lives in `src/inactivity.cpp` (`INACTIVITY_TIMEOUT_MS`, `COUNTDOWN_MS`).
-For testing, set the timeout to a value **greater than** the 60 s countdown
-(e.g. 2 min); if it's set at or below the countdown, the countdown is clamped to
-half the timeout so a normal (non-warning) window always remains.
+**Configuring the window.** The timeout is runtime-configurable and persisted in
+EEPROM, so it survives reboots. A remote's settings screen reads the current
+value (`GET /inactivity` → `{timeoutMinutes}`) to seed its menu and writes the
+user's choice (`POST /inactivity` `{timeoutMinutes}`, clamped to 1–1440 min). The
+OMOTE-Firmware / OMOTE-iphone "Inactivity Timer" setting offers
+15/30/45/60/90/120/180 min. Changing it resets the running timer so the new
+window starts immediately.
+
+The default (60 min) and the `COUNTDOWN_MS` (60 s) live in `src/inactivity.cpp`.
+If the configured window is at or below the countdown, the countdown is clamped to
+half the window so a normal (non-warning) stretch always remains — handy when
+setting a short window for testing.
 
 ---
 

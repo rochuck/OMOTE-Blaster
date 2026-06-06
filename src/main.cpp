@@ -23,6 +23,8 @@ setup() {
     display_init();
     delay(1000); // hold the boot splash before the WiFi status screen replaces it
 
+    inactivity_begin(); // load the persisted auto-off window before serving /inactivity
+
     wifi_setup_begin(BLASTER_AP_NAME, BLASTER_HOSTNAME);
     mdns_service_begin(BLASTER_HOSTNAME, BLASTER_HTTP_PORT, BLASTER_OTA_PORT);
     http_server_begin(BLASTER_HTTP_PORT);
