@@ -137,6 +137,11 @@ a higher-current rail or a separate driver supply.
 | POST   | `/state`  | GUI state authority — see below.                                                 |
 | GET    | `/inactivity` | Auto-off window: `{ok, timeoutMinutes}`. See *Inactivity auto-off*.           |
 | POST   | `/inactivity` | Set auto-off window. Body: `{timeoutMinutes}` (1–1440). Persisted to EEPROM.  |
+| GET    | `/fan`    | Ceiling-fan light state: `{ok, light, actions}`. See *Ceiling fan*.              |
+| POST   | `/fan`    | Fan/light action. `?action=light_off` (or form/JSON body). See *Ceiling fan*.    |
+| POST   | `/fan/light/off` | Turn the fan light off. No body needed.                                   |
+| POST   | `/fan/light/on`  | Turn the fan light on. No body needed.                                    |
+| POST   | `/fan/light/toggle` | Toggle the fan light. No body needed.                                  |
 | GET    | `/status` | Health/version: `{ok, version, uptime, rssi, ip, scene, lastCommand, lastCommandAgo}` |
 | POST   | `/reset`  | Reboot (debug aid, build-flag gated).                                            |
 
@@ -201,6 +206,106 @@ remote to wake has somewhere to read from.
 ### OTA implementation
 
 Direct port of [OMOTE-Firmware/hardware/ESP32/ota_hal_esp32.cpp](../OMOTE-Firmware/hardware/ESP32/ota_hal_esp32.cpp) (~80 lines). Same shape; just swap the includes:
+
+---
+
+## Ceiling fan (Big Ass Fans Haiku)
+
+The Haiku fan and its LED light are IR-only on this unit, and they're the second
+thing — after the auto-off codes — that the blaster drives from its **own** code
+table rather than repeating what the remote sent. That's the point: the light can
+be switched from Home Assistant with the OMOTE asleep, flat, or in another room.
+
+Codes live in `src/fan_control.cpp`, copied verbatim from OMOTE-Firmware's
+`device_haikuFan.cpp` (extended NEC, 32 bits, address `0xF0BA`). Both copies have
+to be fixed together if a button is ever recaptured.
+
+**Actions:** `light_off` `light_on` `light_toggle` `light_up` `light_down`
+`fan_toggle` `fan_up` `fan_down`, plus bare `off` / `on` / `toggle` as light
+aliases. Any of three transports, whichever the client finds easiest:
+
+```
+POST /fan?action=light_off                       # query string
+POST /fan   action=light_off                     # form-urlencoded body
+POST /fan   {"action":"light_off"}               # JSON body
+POST /fan/light/off                              # path only, no body at all
+```
+
+Response is `{ok, light}`, where `light` is the resulting state.
+
+### How "off" works without an off code
+
+The Haiku protocol has no discrete on/off for the light — only a toggle — so
+firing the toggle blind is a coin flip that turns the light *on* half the time.
+The way out is that **LIGHT + always leaves the light on**, whether it was on or
+off beforehand. That manufactures a known state to toggle out of:
+
+| Action      | Sequence            | Result                            |
+|-------------|---------------------|-----------------------------------|
+| `light_off` | `+` → `-` → `toggle`| Off, from any starting state      |
+| `light_on`  | `+` → `-`           | On, from any starting state       |
+
+The `-` undoes the brightness step the `+` cost. Both sequences are
+deterministic, so Home Assistant can call `light_off` twice in a row and the
+light is off both times — no state tracking, no guessing, no `assumed_state`.
+
+Two details worth knowing:
+
+- **Timing.** The codes are spaced `FAN_STEP_GAP_MS` (200 ms) apart so the fan
+  reads them as separate button presses rather than one held button — NEC repeat
+  frames arrive every ~108 ms. `light_off` therefore blocks its HTTP handler for
+  ~400 ms before responding, which is well inside any client's timeout.
+- **One-step dimming.** If the light was already at maximum brightness, the `+`
+  is clamped and the `-` isn't, so it ends one step dimmer. It doesn't compound:
+  the next cycle's `+` wins that step back before the `-` takes it again, so the
+  light settles one step below max and stays there.
+
+`light_toggle` remains available as the raw, single-code button press for when
+you want exactly one press and nothing else. `GET /fan` reports the light state,
+which is exact after a `light_off`/`light_on` and only goes stale if someone has
+since used the fan's own remote — nothing reports back to us.
+
+**Not an AV scene.** The fan endpoints deliberately do **not** reset the
+inactivity auto-off timer — Home Assistant flicking the light at 2 a.m. must not
+hold the TV and amp on. They do show up on the OLED as the last command.
+
+### Home Assistant
+
+`rest_command` needs nothing but a URL:
+
+```yaml
+rest_command:
+  fan_light_off:
+    url: "http://omote-blaster.local/fan/light/off"
+    method: post
+  fan_light_on:
+    url: "http://omote-blaster.local/fan/light/on"
+    method: post
+```
+
+If HA's container can't resolve `.local`, use the blaster's IP (the same address
+`platformio.ini` uses for OTA). Because both calls are deterministic, a plain
+template switch works — no `assumed_state` needed:
+
+```yaml
+rest:
+  - resource: "http://omote-blaster.local/fan"
+    scan_interval: 30
+    sensor:
+      - name: "Fan light"
+        value_template: "{{ value_json.light }}"
+
+switch:
+  - platform: template
+    switches:
+      fan_light:
+        friendly_name: "Fan light"
+        value_template: "{{ states('sensor.fan_light') == 'on' }}"
+        turn_on:
+          service: rest_command.fan_light_on
+        turn_off:
+          service: rest_command.fan_light_off
+```
 
 ---
 
@@ -294,6 +399,29 @@ End-to-end smoke test, in order:
     panel shows the **Off** logo, `/status` reports `scene:"Off"`, and every
     remote reconciles to the Off scene on its next poll. Confirm it powers off once
     and does **not** re-fire. Restore the production timeout (1 h) when done.
+
+12. **Ceiling fan.** With the blaster in line of sight of the Haiku:
+
+    ```bash
+    # From the light ON, and again from the light OFF — must end off both times.
+    curl -X POST http://omote-blaster.local/fan/light/off
+    curl -X POST http://omote-blaster.local/fan/light/off   # still off, not on
+    curl http://omote-blaster.local/fan                     # {"light":"off"}
+
+    curl -X POST http://omote-blaster.local/fan/light/on    # on, from either state
+    curl -X POST "http://omote-blaster.local/fan?action=fan_up"   # motor speeds up
+    ```
+
+    Watch the sequence with the phone-camera trick: `light_off` should be three
+    distinct bursts ~200 ms apart, not one. If the fan only reacts to the first,
+    raise `FAN_STEP_GAP_MS` in `src/fan_control.cpp` — it's too fast for the
+    fan's receiver to see them as separate presses.
+
+    Confirm the auto-off timer is *not* reset by any of these: with a scene
+    active, set a short window (`POST /inactivity {"timeoutMinutes":1}`), let it
+    reach the on-screen countdown, then fire a fan call — the countdown must
+    keep running and still power the AV gear off. (`lastCommandAgo` in `/status`
+    *does* reset; that's display bookkeeping, not the auto-off timer.)
 
 ---
 

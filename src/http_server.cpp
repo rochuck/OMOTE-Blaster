@@ -1,5 +1,6 @@
 #include "http_server.h"
 #include "blaster_state.h"
+#include "fan_control.h"
 #include "inactivity.h"
 #include "ir_sender.h"
 #include "status_led.h"
@@ -260,6 +261,97 @@ handle_inactivity_post() {
     send_json(200, resp);
 }
 
+// --- Ceiling fan (Big Ass Fans Haiku) ------------------------------------
+// Endpoints for Home Assistant and anything else that can make an HTTP request.
+// The IR codes are local to the blaster (see fan_control.cpp), so these work
+// with the remote asleep, busy, or gone entirely.
+//
+// Deliberately NOT wired to inactivity_note_activity(): the fan is not part of
+// an AV scene, so Home Assistant flicking the light must not hold the TV/amp
+// auto-off timer open.
+
+static void
+run_fan_action(FanAction action) {
+    if (action == FAN_ACTION_INVALID) {
+        JsonDocument doc;
+        doc["ok"]      = false;
+        doc["error"]   = "unknown or missing action";
+        doc["actions"] = fan_control_action_names();
+        send_json(400, doc);
+        return;
+    }
+
+    // light_off/light_on are three- and two-code sequences with a gap between
+    // each, so this blocks for a few hundred ms before responding. That's well
+    // inside any client's timeout and simpler than deferring the tail of the
+    // sequence into loop(), which would need its own state machine.
+    IrSendResult r = fan_control_run(action);
+    if (!r.ok) {
+        send_error(500, r.error ? r.error : "fan send failed");
+        return;
+    }
+
+    Serial.printf("[rx] /fan action=\"%s\" light=%s\n",
+                  fan_control_action_label(action),
+                  fan_control_light_state_name());
+
+    // Show it on the OLED like any other command, but leave the scene alone —
+    // the fan is orthogonal to whichever AV scene happens to be running.
+    blaster_state_set_last_command(fan_control_action_label(action));
+
+    status_led_pulse_cmd();
+    JsonDocument resp;
+    resp["ok"]    = true;
+    resp["light"] = fan_control_light_state_name();
+    send_json(200, resp);
+}
+
+static void
+handle_fan_post() {
+    // Accept the action three ways so any client can drive it:
+    //   POST /fan?action=light_off          <- query string, simplest for HA
+    //   POST /fan   action=light_off        <- form-urlencoded body
+    //   POST /fan   {"action":"light_off"}  <- JSON body
+    // The server folds urlencoded bodies into the query args, so the first two
+    // both arrive in arg("action") and only JSON needs decoding here.
+    String action_name;
+
+    if (s_server->hasArg("action")) {
+        action_name = s_server->arg("action");
+    } else if (s_server->hasArg("plain")) {
+        const String& body = s_server->arg("plain");
+        if (body.length() > 128) {
+            send_error(413, "body too large");
+            return;
+        }
+        JsonDocument         req;
+        DeserializationError err = deserializeJson(req, body);
+        if (err) {
+            send_error(400, "JSON parse error");
+            return;
+        }
+        if (!req["action"].is<const char*>()) {
+            send_error(400, "action (string) required");
+            return;
+        }
+        action_name = req["action"].as<const char*>();
+    }
+
+    run_fan_action(fan_control_parse_action(action_name));
+}
+
+static void
+handle_fan_get() {
+    JsonDocument doc;
+    doc["ok"] = true;
+    // Exact after a light_off/light_on (both establish a known state); stale
+    // only if someone has since used the fan's own remote, which tells us
+    // nothing. "unknown" until the blaster has driven the light once since boot.
+    doc["light"]   = fan_control_light_state_name();
+    doc["actions"] = fan_control_action_names();
+    send_json(200, doc);
+}
+
 static void
 handle_reset() {
     status_led_pulse_cmd();
@@ -287,6 +379,13 @@ http_server_begin(uint16_t port) {
     s_server->on("/state", HTTP_POST, handle_state_post);
     s_server->on("/inactivity", HTTP_GET,  handle_inactivity_get);
     s_server->on("/inactivity", HTTP_POST, handle_inactivity_post);
+    s_server->on("/fan", HTTP_GET,  handle_fan_get);
+    s_server->on("/fan", HTTP_POST, handle_fan_post);
+    // Path-only convenience routes: a Home Assistant rest_command needs nothing
+    // but a url and method, no payload or content_type.
+    s_server->on("/fan/light/off", HTTP_POST, []() { run_fan_action(FAN_LIGHT_OFF); });
+    s_server->on("/fan/light/on", HTTP_POST, []() { run_fan_action(FAN_LIGHT_ON); });
+    s_server->on("/fan/light/toggle", HTTP_POST, []() { run_fan_action(FAN_LIGHT_TOGGLE); });
     s_server->on("/reset", HTTP_POST, handle_reset);
     s_server->onNotFound(handle_not_found);
     s_server->begin();
