@@ -6,6 +6,7 @@
 #include "ir_sender.h"
 #include "mdns_service.h"
 #include "ota.h"
+#include "presence.h"
 #include "status_led.h"
 #include "time_sync.h"
 #include "wifi_setup.h"
@@ -21,6 +22,7 @@ setup() {
     Serial.printf("\n[boot] OMOTE-Blaster %s\n", BLASTER_VERSION);
 
     status_led_init();
+    presence_init();
     display_init();
     delay(1000); // hold the boot splash before the WiFi status screen replaces it
 
@@ -40,6 +42,7 @@ loop() {
     mdns_service_loop();
     display_loop();
     http_server_loop();
+    presence_loop();   // motion counts as activity; must run before inactivity_loop
     inactivity_loop(); // after http_server_loop so it sees this tick's activity
     ota_loop();
     status_led_loop();

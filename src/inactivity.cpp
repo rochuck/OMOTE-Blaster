@@ -7,12 +7,12 @@
 #include <Arduino.h>
 #include <EEPROM.h>
 
-// Power off after this long with no user action, warning for the final stretch.
+// Power off after this long with no user action (remote or PIR motion), warning for the final stretch.
 // Runtime-configurable via inactivity_set_timeout_minutes (default below), so
 // s_timeout_ms is the live value the loop and the on-screen indicator both read.
 // It must be > COUNTDOWN_MS to leave a normal (non-warning) window; if it isn't,
 // inactivity_loop() clamps the countdown so the timer still behaves sanely.
-static constexpr unsigned int  DEFAULT_TIMEOUT_MINUTES = 60;
+static constexpr unsigned int  DEFAULT_TIMEOUT_MINUTES = 30;
 static constexpr unsigned long COUNTDOWN_MS            = 60UL * 1000UL; // 60 s
 
 static unsigned long s_timeout_ms = (unsigned long) DEFAULT_TIMEOUT_MINUTES * 60UL * 1000UL;

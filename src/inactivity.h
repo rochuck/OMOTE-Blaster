@@ -6,14 +6,15 @@
 //
 // The window length is runtime-configurable (the remote's settings screen reads
 // and writes it via GET/POST /inactivity) and persisted in EEPROM so it survives
-// reboots. Default is 60 minutes.
+// reboots. Default is 30 minutes.
 //
 // During the final COUNTDOWN_MS (60 s) of the window the OLED shows a large
 // seconds-left countdown, flashing in reverse video on alternate seconds. Any
 // user action during the countdown resets the timer and cancels the warning.
 //
-// "User action" means a user-driven POST (see inactivity_note_activity callers);
-// the remote's background GET polling must NOT reset the timer.
+// "User action" means a user-driven POST (see inactivity_note_activity callers)
+// or motion on the PIR sensor (presence.cpp, D1 Mini only); the remote's
+// background GET polling must NOT reset the timer.
 
 // Load the persisted timeout from EEPROM. Call once from setup() before the
 // HTTP server starts (it can serve GET/POST /inactivity).

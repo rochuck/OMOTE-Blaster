@@ -70,6 +70,7 @@ Two build targets are supported:
 | Command-received LED  | D6 / GPIO12    | Lit for 1 s after the most recent HTTP request (`/send`, `/status`, `/update`). |
 | Reset-to-portal       | D3 / GPIO0     | Hold low at boot to force the WiFiManager portal even if creds are saved.  |
 | I2C (reserved)        | D1 / GPIO5 SCL, D2 / GPIO4 SDA | Hardware I2C bus, free for an OLED or other peripheral. 4.7k pull-ups to 3V3 required. |
+| PIR motion sensor     | D0 / GPIO16    | Input, active HIGH. Motion counts as activity for the inactivity auto-off. See *PIR presence sensor*. |
 | Power LED             | (rail)         | No GPIO. Wired to the supply rail through a current-limit resistor — lit whenever powered. |
 | IR-active indicator   | (driver line)  | Visible LED in series/parallel with the IR LEDs themselves. Hardware-only — confirms LEDs are actually pulsing. |
 
@@ -124,6 +125,59 @@ generic solid tantalum here; ESR is the limiting spec, not capacitance.
 Past 4 LEDs the AAT1110's 800 mA average rating sets a DC sag on the 3.3 V
 rail during sustained bursts (no cap fixes this), so further scaling wants
 a higher-current rail or a separate driver supply.
+
+### PIR presence sensor
+
+A PIR motion sensor keeps the TV on while someone is in the room. Motion counts
+as activity for the [inactivity auto-off](#inactivity-auto-off), so the gear
+only powers down after the window passes with **no remote activity and no
+motion**. D1 Mini build only (`-DPIR_PIN=16` in `platformio.ini`); the ESP-01
+has no spare pin.
+
+It goes on **D0 / GPIO16**, the one pin the D1 Mini build doesn't already use.
+GPIO16 is not a boot-strap pin, so the sensor can't stop the board from booting,
+and the firmware turns on its internal pull-down, so a disconnected sensor reads
+"no motion". (GPIO16 has no interrupt; the firmware polls it every loop, which
+is plenty for a PIR.)
+
+**HC-SR501** (the common 32 mm dome module; needs 4.5–20 V):
+
+| PIR pin | D1 Mini pin |
+|---------|-------------|
+| VCC     | **5V**      |
+| GND     | **G**       |
+| OUT     | **D0**      |
+
+The output swings 0–3.3 V, so it connects straight to D0 with no level
+shifting. Board settings:
+- Jumper on **H** (repeat trigger), so the output stays HIGH while motion continues.
+- **Time** pot fully counter-clockwise (~3 s). The firmware does its own holding.
+- **Sensitivity** pot to suit the room: start in the middle and turn it up if
+  people sitting still on the couch get missed.
+
+**AM312** (the tiny 10 mm module; runs on 2.7–12 V): VCC → **3V3**, GND →
+**G**, OUT → **D0**. It has no adjustments (~2 s hold, fixed sensitivity).
+
+Mounting:
+- Aim it at the seating, not at the TV, heater vents or a sunny window, since
+  PIRs see changes in heat.
+- Keep the sensor a few cm away from the D1 Mini's antenna and away from the
+  WiFi side of the board. Both modules are known to false-trigger from the
+  ESP8266's WiFi bursts. If you see `[pir] motion` in an empty room, move it
+  further away or add a 100 nF cap across the sensor's VCC/GND.
+
+If D0 is ever needed for something else, D6 / GPIO12 also works: drop
+`-DLED_CMD_PIN=12` and set `-DPIR_PIN=12` (that pin has no internal pull-down,
+so a disconnected sensor would float). The "IR-active indicator" LED in the
+table above is wired to the IR driver line, not to a GPIO, so it can't be
+reused as an input.
+
+**On the OLED:** while motion has been seen in the last 60 s, a small
+crosswalk-style walking person appears in the top-right corner of the scene
+screen, above the minutes-left readout. Motion does **not** wake a sleeping
+panel. If it did, anyone in the room would keep the OLED lit all evening and
+defeat the burn-in protection. Press a remote key and the walker shows up if
+the sensor is seeing you.
 
 ## Endpoints
 
@@ -312,7 +366,8 @@ switch:
 ## Inactivity auto-off
 
 When a scene is active (anything that isn't `Off` / empty) and **no user action
-reaches the blaster for the configured window** (default 1 hour), the blaster
+reaches the blaster and the PIR sensor sees no motion for the configured
+window** (default 30 min), the blaster
 powers the AV gear down on its own and drops to the `Off` scene. This is the one
 place the blaster acts on its own rather than just repeating what the remote
 sends, so it carries the three power-off codes itself (Sharp TV, Marantz amp,
@@ -322,9 +377,12 @@ Apple TV), fired in the same order as the OMOTE's `scene_allOff`.
   `/scene`. The remote's background polling (`GET /state` every 2 s, `GET
   /status`) is deliberately ignored, or the timer would never elapse. Any
   qualifying POST resets the full timer.
+- **Motion counts too (D1 Mini):** while the PIR sensor sees motion, the timer
+  keeps resetting, so the TV stays on while someone is in the room. See
+  *PIR presence sensor* for wiring and the walking-person icon on the OLED.
 - **Countdown warning:** during the final 60 s the OLED shows a large
   seconds-left number, inverting on alternate seconds to flash. Any user action
-  during the window cancels the shutdown and restarts the hour.
+  or motion during the window cancels the shutdown and restarts the timer.
 - **Going Off cleanly:** the blaster doesn't just set `scene:"Off"` — it pushes
   the complete GUI-state tuple a remote would have on the Off screen
   (`guiList:0`, `guiName:"Scene selection"`, `lastIndex:0`). A partial update
@@ -342,7 +400,7 @@ OMOTE-Firmware / OMOTE-iphone "Inactivity Timer" setting offers
 15/30/45/60/90/120/180 min. Changing it resets the running timer so the new
 window starts immediately.
 
-The default (60 min) and the `COUNTDOWN_MS` (60 s) live in `src/inactivity.cpp`.
+The default (30 min) and the `COUNTDOWN_MS` (60 s) live in `src/inactivity.cpp`.
 If the configured window is at or below the countdown, the countdown is clamped to
 half the window so a normal (non-warning) stretch always remains — handy when
 setting a short window for testing.
@@ -399,6 +457,14 @@ End-to-end smoke test, in order:
     panel shows the **Off** logo, `/status` reports `scene:"Off"`, and every
     remote reconciles to the Off scene on its next poll. Confirm it powers off once
     and does **not** re-fire. Restore the production timeout (1 h) when done.
+
+    **With the PIR sensor:** watch serial for `[pir] motion` / `[pir] clear` as
+    you move in front of it. With a scene active, press a key to wake the OLED;
+    the walker icon appears top-right while you move and goes away ~60 s after
+    you stop. Set `POST /inactivity {"timeoutMinutes":1}`, stay out of the
+    sensor's view until the countdown starts, then wave at it: the countdown
+    must cancel. Leave the room and the gear powers off at 1 min. Then set the
+    window back to 30 min from the remote.
 
 12. **Ceiling fan.** With the blaster in line of sight of the Haiku:
 

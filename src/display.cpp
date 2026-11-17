@@ -14,6 +14,8 @@
 #include "kodi_logo.h"
 #include "lyrion_logo.h"
 #include "off_logo.h"
+#include "presence.h"
+#include "walk_icon.h"
 #include "zethus_logo.h"
 
 // 128x32 panel. -1 = no hardware reset pin (shared with the MCU reset on most
@@ -71,6 +73,7 @@ display_init() {
 // -1 means "nothing drawn yet / not on a scene screen".
 static int     s_overlay_minutes = -1;
 static int16_t s_overlay_px      = -1;
+static bool    s_overlay_walker  = false; // walk icon (PIR motion) drawn
 
 // Inactivity "time remaining" indicator, drawn over a live scene screen: a tiny
 // 2-digit minutes-left readout in the lower-right corner and a 1px rail along
@@ -83,6 +86,7 @@ display_draw_inactivity_overlay() {
     if (!inactivity_get_status(&remaining_ms, &total_ms) || total_ms == 0) {
         s_overlay_minutes = -1;
         s_overlay_px      = -1;
+        s_overlay_walker  = false;
         return;
     }
 
@@ -93,6 +97,16 @@ display_draw_inactivity_overlay() {
 
     s_overlay_minutes = minutes;
     s_overlay_px      = px;
+    s_overlay_walker  = presence_recent();
+
+    // PIR motion seen recently: crosswalk walker in the top-right corner, on a
+    // black backing box like the minutes readout below it (rows 0-19 vs 22-30).
+    if (s_overlay_walker) {
+        int16_t wx = DISPLAY_WIDTH - WALK_ICON_WIDTH - 1;
+        s_display.fillRect(wx - 1, 0, WALK_ICON_WIDTH + 2, WALK_ICON_HEIGHT + 1, SSD1306_BLACK);
+        s_display.drawBitmap(wx, 0, WALK_ICON_BITS, WALK_ICON_WIDTH, WALK_ICON_HEIGHT,
+                             SSD1306_WHITE);
+    }
 
     // Bottom rail (row 31): clear the row of any logo pixels, then draw the
     // remaining-time portion in white from the left.
@@ -298,7 +312,7 @@ display_loop() {
     }
 
     // While a live scene logo is up, tick the inactivity overlay down. Repaint
-    // only when the displayed minute or the rail width changes — at a 1 hr window
+    // only when the displayed minute, the rail width or the walker icon changes — at a 1 hr window
     // that's at most once every ~28 s, so the slow I2C flush stays cheap. This
     // repaints the same scene without touching s_last_activity_ms, so it doesn't
     // hold the panel awake past the normal sleep timeout.
@@ -308,7 +322,8 @@ display_loop() {
             int minutes = (int)((remaining_ms + 59999UL) / 60000UL);
             if (minutes > 99) minutes = 99;
             int16_t px = (int16_t)((uint32_t)remaining_ms * DISPLAY_WIDTH / total_ms);
-            if (minutes != s_overlay_minutes || px != s_overlay_px) {
+            if (minutes != s_overlay_minutes || px != s_overlay_px ||
+                presence_recent() != s_overlay_walker) {
                 display_show_scene(blaster_state_get_scene());
             }
         }
